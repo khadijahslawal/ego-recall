@@ -31,7 +31,7 @@ Reads clip videos from GCS and extracts three types of frames needed by downstre
 ## 0 · Imports & Config
 """
 
-!pip install google-cloud-storage opencv-python-headless tqdm --quiet
+# !pip install google-cloud-storage opencv-python-headless tqdm --quiet
 
 import json
 import os
@@ -110,14 +110,14 @@ and extract all needed frames in a single pass.
 """
 
 # ── Load the clean query-sets parquet from GCS ─────────────────────────────
-!gsutil cp gs://{BUCKET_NAME}/processed/vq_query_sets.parquet /tmp/vq_query_sets.parquet
+# !gsutil cp gs://{BUCKET_NAME}/processed/vq_query_sets.parquet /tmp/vq_query_sets.parquet
 df = pd.read_parquet("/tmp/vq_query_sets.parquet")
 print(f"Loaded {len(df):,} valid query-sets across {df['clip_uid'].nunique():,} clips")
 
 # ── Load raw JSON to recover response track frame numbers ──────────────────
 ANNO_DIR = Path("/tmp")
-!gsutil cp gs://{BUCKET_NAME}/ego4d/v2/annotations/vq_train.json /tmp/vq_train.json
-!gsutil cp gs://{BUCKET_NAME}/ego4d/v2/annotations/vq_val.json   /tmp/vq_val.json
+# !gsutil cp gs://{BUCKET_NAME}/ego4d/v2/annotations/vq_train.json /tmp/vq_train.json
+# !gsutil cp gs://{BUCKET_NAME}/ego4d/v2/annotations/vq_val.json   /tmp/vq_val.json
 
 with open("/tmp/vq_train.json") as f:
     train_raw = json.load(f)
