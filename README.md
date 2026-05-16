@@ -18,6 +18,57 @@ EgoRecall is a two-stage visual memory system that answers the question:
 | 1 — Object Detection | Given a frame, detect the target object | YOLOv8s vs Deformable DETR |
 | 2 — Visual Retrieval | Given a query image of an object, find the frame where it was last seen | CLIP+FAISS vs BLIP+FAISS |
 
+### CLIP vs BLIP for EgoRecall
+Both are vision-language models, but they were built with different goals—and that shapes how well each fits our retrieval pipeline.
+
+#### CLIP (Contrastive Language-Image Pretraining) - OpenAI
+Core idea: Train image and text encoders jointly so that matching image-text pairs are close in a shared embedding space, and mismatched pairs are far apart. It's purely a matching model — it never generates text.
+
+**How it works:**
+- Dual encoder: one tower for images, one for text
+- Both towers project into the same embedding space
+- Trained on 400M (image, alt-text) pairs with a contrastive loss
+- At query time, you embed a text query → find nearest image embeddings → that's your retrieval
+
+**Strengths for EgoRecall:**
+
+- Very fast at retrieval: embeddings are precomputed, similarity is just dot products (perfect for FAISS)
+- Strong zero-shot alignment between natural language and visual content
+- Lightweight inference, scales well to large embedding indexes
+
+**Weaknesses:**
+
+- Text encoder is shallow: short, simple captions only; struggles with complex queries like "the moment before I picked up the screwdriver"
+- No understanding of fine-grained spatial relationships or temporal context
+- Alt-text pretraining data doesn't match egocentric video semantics well
+
+
+#### BLIP (Bootstrapping Language-Image Pretraining) — Salesforce
+Core idea: A more capable vision-language model that can both understand and generate — it adds a captioning head on top of the contrastive setup.
+How it works:
+
+Three-component architecture:
+1. Image encoder
+2. Text encoder
+3. Image-grounded text decoder
+
+- Trained with three objectives simultaneously: contrastive loss (like CLIP), image-text matching (binary classifier), and image-captioning (generative)
+
+- Uses a "bootstrapping" step — it generates synthetic captions for noisy web data, filters them with its own ITC/ITM modules, and retrains on the cleaner set
+
+**Strengths for EgoRecall:**
+
+- Richer semantic understanding — the captioning objective forces deeper image comprehension
+- ITM (Image-Text Matching) head gives you a re-ranking signal beyond raw cosine similarity
+- Better at fine-grained queries that require scene understanding, not just keyword matching
+- BLIP-2 variant is significantly more powerful (uses a frozen LLM backbone)
+
+**Weaknesses:**
+
+- Slower — the ITM re-ranking step requires a forward pass per candidate, which is expensive at scale
+- Heavier model, more VRAM, slower embedding generation
+- Adds pipeline complexity (you'd typically use CLIP-style embeddings for coarse retrieval, then BLIP ITM for re-ranking)
+
 ---
 
 ## What Has Been Done
@@ -192,7 +243,7 @@ Steps:
 2. While VM runs, run §3 of the notebook in Colab to embed visual crops (~20-30 min)
 3. After VM job completes, run §4-6 for evaluation
 
-### Option B: Subset (self-contained, no VM needed)
+### Option A: Subset (self-contained, no VM needed)
 **Prerequisite:** None — everything runs in Colab.  
 **Notebook:** `04_retrieval_baseline_subset.ipynb`
 
