@@ -234,14 +234,6 @@ The script has a checkpoint — if interrupted, restart and it picks up where it
 
 ## Running Notebook 04 — Two Options
 
-### Option A: Full Dataset (pre-computed embeddings)
-**Prerequisite:** VM embedding job must complete first (~4-6 hours with GPU).  
-**Notebook:** `04_retrieval_baseline.ipynb`
-
-Steps:
-1. Start VM, run embedding script in tmux, let it run overnight
-2. While VM runs, run §3 of the notebook in Colab to embed visual crops (~20-30 min)
-3. After VM job completes, run §4-6 for evaluation
 
 ### Option A: Subset (self-contained, no VM needed)
 **Prerequisite:** None — everything runs in Colab.  
@@ -252,7 +244,17 @@ Steps:
 2. Run all cells — extracts frames on-the-fly from 500 random val clips
 3. Results available in ~1-2 hours
 
-Option B is recommended for getting a first result quickly. Option A gives the full picture.
+### Option B: Full Dataset (pre-computed embeddings)
+**Prerequisite:** VM embedding job must complete first (~4-6 hours with GPU).  
+**Notebook:** `04_retrieval_baseline.ipynb`
+
+Steps:
+1. Start VM, run embedding script in tmux, let it run overnight
+2. While VM runs, run §3 of the notebook in Colab to embed visual crops (~20-30 min)
+3. After VM job completes, run §4-6 for evaluation
+
+
+Option A is recommended for getting a first result quickly. Option B gives the full picture.
 
 ---
 
