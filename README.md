@@ -21,7 +21,19 @@ Built using the Ego4D Visual Object Queries (VQ) benchmark, EgoRecall combines:
 
 into a unified wearable AI memory pipeline.
 
+## Key Technical Contributions
+
+- Designed a two-stage multimodal visual memory pipeline for wearable AI systems
+- Built a scalable FAISS-based vector retrieval architecture
+- Compared CNN-based and transformer-based object detectors under constrained compute settings
+- Evaluated multimodal embedding approaches for egocentric episodic memory retrieval
+- Developed preprocessing and indexing pipelines for large-scale Ego4D video data
+- Implemented deployment-oriented local-first retrieval architecture for privacy preservation
+
+
+---
 - [EgoRecall - Visual Memory Retrieval for Smart Glasses](#egorecall---visual-memory-retrieval-for-smart-glasses)
+  - [Key Technical Contributions](#key-technical-contributions)
   - [Business Problem](#business-problem)
   - [Dataset](#dataset)
     - [Dataset Statistics](#dataset-statistics)
@@ -42,17 +54,20 @@ into a unified wearable AI memory pipeline.
     - [Champion Model - YOLOv8s](#champion-model---yolov8s)
     - [Challenger Model - Deformable DETR](#challenger-model---deformable-detr)
     - [Key Challenges in Object Detection Overall](#key-challenges-in-object-detection-overall)
-  - [Cognitive Problem B — Visual Retrieval](#cognitive-problem-b--visual-retrieval)
+  - [Cognitive Problem B - Visual Retrieval](#cognitive-problem-b---visual-retrieval)
     - [Goal](#goal-1)
     - [Champion Model](#champion-model)
     - [Challenger Model](#challenger-model)
     - [Retrieval Challenges](#retrieval-challenges)
-  - [Dataset \& EDA Insights](#dataset--eda-insights)
-  - [Key Technical Contributions](#key-technical-contributions)
+    - [Visual Retrieval Pipeline Deep Dive](#visual-retrieval-pipeline-deep-dive)
+      - [Important: Two Different Evaluation Metrics](#important-two-different-evaluation-metrics)
+      - [Compute Infrastructure - Why a GCP Vertex AI Workbench](#compute-infrastructure---why-a-gcp-vertex-ai-workbench)
+      - [Cache Architecture](#cache-architecture)
+      - [Ground-Truth Coverage Upper Bound](#ground-truth-coverage-upper-bound)
+      - [Retrieval Experiments - Progressive Pipeline](#retrieval-experiments---progressive-pipeline)
+      - [Why Results Are Low - Honest Interpretation](#why-results-are-low---honest-interpretation)
   - [Deployment Architecture](#deployment-architecture)
   - [Future Improvements](#future-improvements)
-
----
 
 ## Business Problem
 
@@ -81,7 +96,7 @@ The table below provides a high-level of the scale of the data that was utilized
 |  | Value |
 | :--- | :--- |
 | Unique Videos | 1,743 |
-| Daya Size | 667 GB|
+| Data Size | 667 GB|
 | Valid Query Sets| 18,114|
 | Unique Objects | 3,487|
 | Extracted Frames | 246,206|
@@ -348,10 +363,17 @@ It penalizes loose boxes and is more meaningful for EgoRecall specifically as a 
 
 ---
 
-## Cognitive Problem B — Visual Retrieval
+## Cognitive Problem B - Visual Retrieval
 
 ### Goal
-Given a query image or semantic concept, retrieve the frame where the object was last observed.
+The retrieval task: given a visual crop (a small cropped image of the target object), find the video frame where that object was last seen. This is a nearest-neighbor search problem in embedding space, but with several non-trivial challenges:
+
+- The query is a small, often blurry cropped object (~39×60px at actual resolution)
+- The index frames are full 720×540 egocentric frames with cluttered backgrounds
+- 3,487 open-vocabulary object types; no class list to rely on
+- Temporal gaps up to 4,750 frames (~15 minutes) between query frame and response track
+- Only ~67% of queries have a ground-truth frame covered by the 1 FPS index sampling
+
 
 ### Champion Model
 CLIP + FAISS
@@ -372,36 +394,191 @@ BLIP-ITM + FAISS
 - egocentric motion blur,
 - semantic ambiguity.
 
----
+### Visual Retrieval Pipeline Deep Dive
 
-## Dataset & EDA Insights
+This section documents the retrieval pipeline in full detail, including the preprocessing architecture, embedding strategy, and the progressive retrieval experiments that produced the final results.
 
-Dataset: Ego4D Visual Object Queries (VQ)
+#### Important: Two Different Evaluation Metrics
 
-Key dataset characteristics:
-- 1,743 egocentric videos,
-- 246K extracted frames,
-- 18K+ valid query sets,
-- 3,487 open-vocabulary object categories,
-- 667GB dataset size.
+The retrieval results appear in two places with **very different numbers**, this is not an error. They use different tolerance thresholds that measure fundamentally different things:
 
-EDA findings strongly influenced model design:
-- objects occupied only 1.9% median frame area,
-- temporal gaps reached ~15 minutes,
-- annotation/frame resolution mismatches required coordinate correction,
-- long-tail object distribution limited closed-set classification approaches.
+| Source | Tolerance | Meaning |
+|--------|-----------|---------|
+| Presentation slides / notebook 04 | ±5 **seconds** (`TOLERANCE_FRAMES = 150`) | Temporal proximity — did we retrieve roughly the right moment? |
+| Tuning notebook 07 | ±5 **frames** (`TOLERANCE_FRAMES = 5`) | Precise frame localization — did we retrieve the exact frame? |
+
+At 30 FPS source video, ±5 seconds = ±150 video frames. At ±5 frames, you need to land within 0.17 seconds of the response track. The tuning notebook is ~30× stricter.
+
+**BLIP Top-1 accuracy:**
+- Slides metric (±5 seconds): **8.64%**
+- Tuning metric (±5 frames): **0.52%**
+
+Both numbers are correct for what they measure. The slides metric is closer to the real user experience — "show me roughly when I last had this object" — and is the more meaningful product metric. The tuning metric tests precise localization, which is a much harder problem and is more relevant if detection bounding boxes are needed for the final output.
+
+When reading the tuning experiment results below, keep in mind they use the strict ±5 frame threshold.
+
+#### Compute Infrastructure - Why a GCP Vertex AI Workbench
+
+The retrieval preprocessing (`06_preprocess_nclips300`) ran on a **GCP Vertex AI Workbench instance** (`/home/jupyter/` paths in the notebooks), not on Colab. This was a deliberate choice driven by the scale of the job:
+
+- 300 clips × ~300 index frames each = ~90,000 frames to embed through CLIP and BLIP
+- Each clip required downloading a ~400MB source video, extracting frames, embedding, saving cache files, then deleting the video
+- The Workbench instance provided persistent storage and longer-running sessions than Colab for this multi-hour preprocessing job
+
+The preprocessing was split into 5 batches of 60 clips each (`BATCH_ID = 0, 1, 2, 3, 4`) so that each batch could be run independently and the cache files saved to disk incrementally. This was important because the job was long enough that a single session failure would otherwise lose all progress.
+
+#### Cache Architecture
+
+The preprocessing notebook produces a structured cache for each clip:
+
+```
+results/retrieval_subset/cache/
+├── index_frame_embeddings/
+│   └── {clip_uid}_index_embeddings.npz    ← frame_numbers, clip_embs, blip_embs
+└── query_embeddings/
+    ├── {clip_uid}_query_embeddings.npz    ← clip_embs, blip_embs
+    └── {clip_uid}_query_metadata.parquet  ← annotation_uid, qs_id, object_title
+```
+
+Each `.npz` file stores both CLIP (512-dim) and BLIP (768-dim) embeddings together, which allowed the tuning notebook to load both models' embeddings in a single file read rather than two separate reads per clip. This was a design decision that paid off during the grid search experiments, where each clip was loaded dozens of times.
+
+**Robustness — targeted repair rather than full re-run:**
+After the 5 batches completed, one clip (`18dad6e7-5969-4573-a1b3-f4ccfc53c350`) failed to cache correctly. Rather than re-running the entire preprocessing job, a `preprocess_one_clip_for_cache()` repair function was used to reprocess just that single clip. The final cache completeness check (`check_clip_cache_status()`) confirmed all 300 clips were fully cached before proceeding to tuning. This pattern starting from verifying completeness, repairing selectively and re-verifying is worth keeping for any future preprocessing job at this scale.
+
+**Why cache embeddings rather than recompute on the fly:**  
+CLIP and BLIP inference on ~300 frames per clip takes ~10-30 seconds per clip on GPU. With 5 retrieval methods × multiple hyperparameter settings to evaluate, recomputing would have taken hours. Caching the embeddings once reduced each evaluation run to pure numpy operations — loading, dot products, sorting — which runs across 300 clips in under a minute.
+
+**Defensive embedding extraction:**
+The `_to_feature_tensor()` helper handles inconsistent output formats across CLIP and BLIP HuggingFace versions — it tries `image_embeds`, then `pooler_output`, then `last_hidden_state[:, 0, :]` before raising an error. This prevents silent failures when model output formats change across library updates, which happened during development.
 
 
----
+#### Ground-Truth Coverage Upper Bound
 
-## Key Technical Contributions
+Before running any retrieval experiments, the team computed a critical diagnostic: what fraction of queries even have a ground-truth frame in the index?
 
-- Designed a two-stage multimodal visual memory pipeline for wearable AI systems
-- Built a scalable FAISS-based vector retrieval architecture
-- Compared CNN-based and transformer-based object detectors under constrained compute settings
-- Evaluated multimodal embedding approaches for egocentric episodic memory retrieval
-- Developed preprocessing and indexing pipelines for large-scale Ego4D video data
-- Implemented deployment-oriented local-first retrieval architecture for privacy preservation
+The 1 FPS sampling strategy means index frames are spaced 30 video frames apart. If a response track falls entirely between two sampled frames, no retrieval method can succeed regardless of embedding quality. The analysis showed:
+
+**~67% of queries have at least one index frame within ±5 seconds of the response track.**
+
+This 67% figure is the theoretical upper bound on Top-100 retrieval accuracy. The ~33% gap is not a model failure — it's a sampling coverage failure. The practical implication: even a perfect retrieval model can only achieve ~67% Top-100 accuracy with 1 FPS indexing. Increasing to 2 FPS would substantially close this gap.
+
+This finding shaped the interpretation of all subsequent results. A Top-100 accuracy of 25% should be compared against the 67% upper bound, not against 100%.
+
+#### Retrieval Experiments - Progressive Pipeline
+
+The tuning notebook (`07_tuning_nclips300_cached_retrieval`) evaluated five increasingly sophisticated retrieval strategies, each building on the previous. All experiments operated on the same 300-clip, 1,157-query evaluation set.
+
+**Evaluation metric:** `first_correct_rank` - the rank at which the first frame within ±5 frames of the response track appears. Success at Top-K means `first_correct_rank ≤ K`.
+
+**Stage 1 — Single Model Baseline (CLIP vs BLIP)**
+
+Raw cosine similarity between query embedding and index frame embeddings, using L2-normalized vectors so dot product = cosine similarity.
+
+| Model | Top-1 | Top-5 | Top-10 | Top-20 | Top-50 | Top-100 |
+|-------|-------|-------|--------|--------|--------|---------|
+| CLIP  | 0.52% | 1.73% | 2.94%  | 5.27%  | 15.04% | 24.98%  |
+| BLIP  | 0.52% | 1.47% | 2.85%  | 5.62%  | 13.57% | 25.67%  |
+
+CLIP and BLIP perform nearly identically. The complementary pattern showed that CLIP is better at Top-50, BLIP slightly better at Top-100. This suggested the two embedding spaces contain partially different signals, motivating fusion experiments.
+
+**Stage 2 - CLIP/BLIP Alpha Fusion**
+
+Linear interpolation of CLIP and BLIP similarity scores:
+
+```
+fusion_score = α × CLIP_score + (1 - α) × BLIP_score
+```
+
+Grid search over α ∈ {0.0, 0.25, 0.5, 0.75, 1.0}.
+
+| Alpha | Interpretation | Top-1 | Top-10 | Top-50 | Top-100 |
+|-------|---------------|-------|--------|--------|---------|
+| 0.00  | BLIP-only     | 0.52% | 2.85%  | 13.57% | 25.67%  |
+| 0.50  | Equal fusion  | 0.61% | 2.77%  | 13.83% | 25.84%  |
+| 0.75  | CLIP-dominant | 0.43% | 3.03%  | 14.17% | 25.50%  |
+| 1.00  | CLIP-only     | 0.52% | 2.94%  | 15.04% | 24.98%  |
+
+**Finding:** Fusion provides only marginal improvement over single-model baselines. The best Top-100 (25.84%) comes from α=0.5, but the gain over BLIP-only (25.67%) is minimal. The conclusion was that embedding-level fusion alone cannot close the recall gap. The bottleneck is whether the correct frame exists in the candidate set at all, not how it's ranked once it's there.
+
+**Stage 3 - Temporal Smoothing**
+
+After fusion, smooth similarity scores across neighboring sampled index frames:
+
+```python
+for i in range(n):
+    window = scores[max(0,i-half) : min(n,i+half+1)]
+    smoothed[i] = window.max()  # or window.mean()
+```
+
+The intuition: objects don't appear and disappear between consecutive 1-second sampled frames. If frame t has a high similarity score, neighboring frames t-1 and t+1 should also receive a score boost.
+
+Grid search over: α ∈ {0.5, 0.75}, window_size ∈ {3, 5, 7}, mode ∈ {mean, max}.
+
+**Finding:** Max smoothing consistently outperforms mean smoothing. Mean smoothing dilutes sharp local similarity peaks — important because response tracks are short (median 10 frames) and the correct frame window can be narrow. Max smoothing preserves these local peaks.
+
+Best temporal smoothing result: Top-20 improved to **7.00%** (vs 5.45% from alpha fusion), but Top-100 did not improve substantially. Temporal smoothing helps promote correct frames when they're nearby strong candidates, but doesn't solve the broader recall problem.
+
+**Stage 4 — Candidate-Guided Window Reranking**
+
+A more targeted approach to addressing the recall-precision tradeoff:
+
+1. Compute fusion scores
+2. Select top `candidate_topk` frames as anchors
+3. Expand ±`window_radius` index positions around each anchor
+4. Re-score the expanded candidate set
+
+```python
+anchor_indices = np.argsort(-fusion_scores)[:candidate_topk]
+for anchor_idx in anchor_indices:
+    for idx in range(anchor_idx - window_radius, anchor_idx + window_radius + 1):
+        expanded_scores[idx].append(fusion_scores[idx])
+```
+
+The intuition: the top-k frames from raw similarity are likely near the correct answer temporally. Expanding around them increases the chance of including the actual ground-truth frame, which may have been missed by the 1 FPS sampling.
+
+Grid search over: candidate_topk ∈ {10, 20, 50}, window_radius ∈ {2, 5, 10}.
+
+Best result: Top-100 improved to **26.62%** (candidate_window outperforming pure temporal smoothing at the broad recall level).
+
+**Stage 5 - Hybrid: Candidate Window + Local Temporal Smoothing**
+
+Combining Stage 4 (candidate expansion) with Stage 3 (temporal smoothing within the expanded window):
+
+```
+Best configuration:
+  alpha = 0.5
+  candidate_topk = 50
+  window_radius = 5
+  local_smooth_radius = 5
+  smooth_mode = max
+```
+
+**Final results (best method):**
+- Top-20: **7.69%**
+- Top-50: **16.85%**
+- Top-100: **27.92%**
+
+The hybrid method provides the best balance: candidate-window expansion improves broad candidate recall, while local temporal smoothing improves ranking within the expanded candidate regions.
+
+#### Why Results Are Low - Honest Interpretation
+
+The tuning notebook results (Top-1: 0.52%, Top-100: 27.92%) need to be read against three constraints:
+
+**1. The ±5 frame threshold is extremely strict.**
+The tuning experiments require retrieving within 0.17 seconds of the response track. Against the slides' ±5 second threshold, BLIP baseline achieves 8.64% Top-1 - a 16× difference from the same model. The tuning metric is appropriate for research benchmarking; the slides metric is appropriate for product evaluation. Neither is wrong, they measure different things.
+
+**2. The 67% coverage ceiling.**
+~33% of queries cannot succeed at any Top-K because no 1 FPS index frame falls within ±5 frames of their response track. This is a sampling artifact, not a model failure. Against the stricter metric, even a perfect retrieval model cannot exceed ~67% Top-100. Against the ±5 second metric this ceiling is higher, which is why slides numbers look more reasonable.
+
+**3. Query-index domain mismatch.**
+The query is a small cropped object image (~39×60px); the index frames are full 720×540 egocentric scenes. CLIP and BLIP were pretrained on web image-caption pairs — neither was trained to match a small crop against a full frame containing that crop somewhere.
+
+**What would actually help:**
+- 2-5 FPS index sampling to close the coverage gap
+- Fine-tuning CLIP/BLIP contrastively on matched visual crop–full frame pairs from Ego4D
+- Using the `object_title` text label as an additional query signal via CLIP's text encoder
+- Using the ±5 second metric as the primary evaluation criterion for product-oriented work
+
 
 ---
 
