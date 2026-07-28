@@ -199,7 +199,7 @@ Discovery: when the first visual crop was extracted, it returned an empty array.
 ```python
 print(f"Frame shape (actual)    : {frame.shape}")    # (540, 720, 3)
 print(f"Annotation orig_w×orig_h: {vc['original_width']}×{vc['original_height']}")  # 1440×1080
-print(f"Crop y coordinate       : {vc['y']}")         # 587 — out of bounds for 540px frame
+print(f"Crop y coordinate       : {vc['y']}")         # 587 - out of bounds for 540px frame
 ```
  
 Fix applied to both `crop_image()` and `make_yolo_label()`:
@@ -222,7 +222,7 @@ Rather than transferring files individually, the VM (which has fast intra-GCP ne
 ```bash
 # On VM: copy from GCS, tar, upload tar back to GCS
 gsutil -m cp -r gs://egorecall-data/frames/detection/train/* ~/det_train/
-tar -cf ~/det_train.tar ~/det_train/   # no compression — JPEGs don't compress
+tar -cf ~/det_train.tar ~/det_train/   # no compression - JPEGs don't compress
 gsutil cp ~/det_train.tar gs://egorecall-data/processed/det_train.tar
  
 # In Colab: download 1 file instead of 184K
@@ -238,7 +238,7 @@ Transfer time: 4 files downloaded in minutes vs 2-3 hours for 246K individual fi
 
 ### 6. Colab Session Timeouts and Training Continuity
  
-YOLOv8 training at `imgsz=640` estimated ~1:22 per epoch on T4 — 50 epochs would take ~69 hours, far beyond any Colab session limit. Even at `imgsz=320` with 20 epochs, the ~7-hour estimate exceeded typical free session limits.
+YOLOv8 training at `imgsz=640` estimated ~1:22 per epoch on T4. Thus, 50 epochs would take ~69 hours, far beyond any Colab session limit. Even at `imgsz=320` with 20 epochs, the ~7-hour estimate exceeded typical free session limits.
  
 **Solutions applied:**
  
@@ -275,7 +275,7 @@ Drive persists across Colab sessions even when `/content/` is wiped.
  
 The GCP VM experienced recurring SSH connection failure that required a stop/start cycle to resolve. This happened multiple times during overnight jobs, interrupting the embedding script mid-run.
  
-Root cause was never definitively identified (likely GCP's automatic maintenance migration combined with the VM's e2-standard-2 machine type). The checkpoint system in all VM scripts (`embed_index_frames.py`, `train_yolo.py`) was designed specifically to survive these interruptions — every 50 videos completed writes a JSON checkpoint so the script restarts cleanly from where it left off.
+Root cause was never definitively identified (likely GCP's automatic maintenance migration combined with the VM's e2-standard-2 machine type). The checkpoint system in all VM scripts (`embed_index_frames.py`, `train_yolo.py`) was designed specifically to survive these interruptions. Every 50 videos completed writes a JSON checkpoint so the script restarts cleanly from where it left off.
  
 **Important VM persistence note:** `/tmp` is cleared on VM restart. Any files written there (annotation JSONs, intermediate data) must be re-downloaded after a restart. All persistent data was written to `~/data/` or directly to GCS.
  
@@ -404,8 +404,8 @@ The retrieval results appear in two places with **very different numbers**, this
 
 | Source | Tolerance | Meaning |
 |--------|-----------|---------|
-| Presentation slides / notebook 04 | ±5 **seconds** (`TOLERANCE_FRAMES = 150`) | Temporal proximity — did we retrieve roughly the right moment? |
-| Tuning notebook 07 | ±5 **frames** (`TOLERANCE_FRAMES = 5`) | Precise frame localization — did we retrieve the exact frame? |
+| Presentation slides / notebook 04 | ±5 **seconds** (`TOLERANCE_FRAMES = 150`) | Temporal proximity - did we retrieve roughly the right moment? |
+| Tuning notebook 07 | ±5 **frames** (`TOLERANCE_FRAMES = 5`) | Precise frame localization - did we retrieve the exact frame? |
 
 At 30 FPS source video, ±5 seconds = ±150 video frames. At ±5 frames, you need to land within 0.17 seconds of the response track. The tuning notebook is ~30× stricter.
 
@@ -413,7 +413,7 @@ At 30 FPS source video, ±5 seconds = ±150 video frames. At ±5 frames, you nee
 - Slides metric (±5 seconds): **8.64%**
 - Tuning metric (±5 frames): **0.52%**
 
-Both numbers are correct for what they measure. The slides metric is closer to the real user experience — "show me roughly when I last had this object" — and is the more meaningful product metric. The tuning metric tests precise localization, which is a much harder problem and is more relevant if detection bounding boxes are needed for the final output.
+Both numbers are correct for what they measure. The slides metric is closer to the real user experience - "show me roughly when I last had this object" and is the more meaningful product metric. The tuning metric tests precise localization, which is a much harder problem and is more relevant if detection bounding boxes are needed for the final output.
 
 When reading the tuning experiment results below, keep in mind they use the strict ±5 frame threshold.
 
@@ -442,14 +442,14 @@ results/retrieval_subset/cache/
 
 Each `.npz` file stores both CLIP (512-dim) and BLIP (768-dim) embeddings together, which allowed the tuning notebook to load both models' embeddings in a single file read rather than two separate reads per clip. This was a design decision that paid off during the grid search experiments, where each clip was loaded dozens of times.
 
-**Robustness — targeted repair rather than full re-run:**
+**Robustness - targeted repair rather than full re-run:**
 After the 5 batches completed, one clip (`18dad6e7-5969-4573-a1b3-f4ccfc53c350`) failed to cache correctly. Rather than re-running the entire preprocessing job, a `preprocess_one_clip_for_cache()` repair function was used to reprocess just that single clip. The final cache completeness check (`check_clip_cache_status()`) confirmed all 300 clips were fully cached before proceeding to tuning. This pattern starting from verifying completeness, repairing selectively and re-verifying is worth keeping for any future preprocessing job at this scale.
 
 **Why cache embeddings rather than recompute on the fly:**  
-CLIP and BLIP inference on ~300 frames per clip takes ~10-30 seconds per clip on GPU. With 5 retrieval methods × multiple hyperparameter settings to evaluate, recomputing would have taken hours. Caching the embeddings once reduced each evaluation run to pure numpy operations — loading, dot products, sorting — which runs across 300 clips in under a minute.
+CLIP and BLIP inference on ~300 frames per clip takes ~10-30 seconds per clip on GPU. With 5 retrieval methods × multiple hyperparameter settings to evaluate, recomputing would have taken hours. Caching the embeddings once reduced each evaluation run to pure numpy operations such as loading, dot products, sorting which runs across 300 clips in under a minute.
 
 **Defensive embedding extraction:**
-The `_to_feature_tensor()` helper handles inconsistent output formats across CLIP and BLIP HuggingFace versions — it tries `image_embeds`, then `pooler_output`, then `last_hidden_state[:, 0, :]` before raising an error. This prevents silent failures when model output formats change across library updates, which happened during development.
+The `_to_feature_tensor()` helper handles inconsistent output formats across CLIP and BLIP HuggingFace versions. It tries `image_embeds`, then `pooler_output`, then `last_hidden_state[:, 0, :]` before raising an error. This prevents silent failures when model output formats change across library updates, which happened during development.
 
 
 #### Ground-Truth Coverage Upper Bound
@@ -460,7 +460,7 @@ The 1 FPS sampling strategy means index frames are spaced 30 video frames apart.
 
 **~67% of queries have at least one index frame within ±5 seconds of the response track.**
 
-This 67% figure is the theoretical upper bound on Top-100 retrieval accuracy. The ~33% gap is not a model failure — it's a sampling coverage failure. The practical implication: even a perfect retrieval model can only achieve ~67% Top-100 accuracy with 1 FPS indexing. Increasing to 2 FPS would substantially close this gap.
+This 67% figure is the theoretical upper bound on Top-100 retrieval accuracy. The ~33% gap is not a model failure, it's a sampling coverage failure. The practical implication: even a perfect retrieval model can only achieve ~67% Top-100 accuracy with 1 FPS indexing. Increasing to 2 FPS would substantially close this gap.
 
 This finding shaped the interpretation of all subsequent results. A Top-100 accuracy of 25% should be compared against the 67% upper bound, not against 100%.
 
@@ -470,7 +470,7 @@ The tuning notebook (`07_tuning_nclips300_cached_retrieval`) evaluated five incr
 
 **Evaluation metric:** `first_correct_rank` - the rank at which the first frame within ±5 frames of the response track appears. Success at Top-K means `first_correct_rank ≤ K`.
 
-**Stage 1 — Single Model Baseline (CLIP vs BLIP)**
+**Stage 1 - Single Model Baseline (CLIP vs BLIP)**
 
 Raw cosine similarity between query embedding and index frame embeddings, using L2-normalized vectors so dot product = cosine similarity.
 
@@ -514,11 +514,11 @@ The intuition: objects don't appear and disappear between consecutive 1-second s
 
 Grid search over: α ∈ {0.5, 0.75}, window_size ∈ {3, 5, 7}, mode ∈ {mean, max}.
 
-**Finding:** Max smoothing consistently outperforms mean smoothing. Mean smoothing dilutes sharp local similarity peaks — important because response tracks are short (median 10 frames) and the correct frame window can be narrow. Max smoothing preserves these local peaks.
+**Finding:** Max smoothing consistently outperforms mean smoothing. Mean smoothing dilutes sharp local similarity peaks. This is  important because response tracks are short (median 10 frames) and the correct frame window can be narrow. Max smoothing preserves these local peaks.
 
 Best temporal smoothing result: Top-20 improved to **7.00%** (vs 5.45% from alpha fusion), but Top-100 did not improve substantially. Temporal smoothing helps promote correct frames when they're nearby strong candidates, but doesn't solve the broader recall problem.
 
-**Stage 4 — Candidate-Guided Window Reranking**
+**Stage 4 - Candidate-Guided Window Reranking**
 
 A more targeted approach to addressing the recall-precision tradeoff:
 
@@ -571,7 +571,7 @@ The tuning experiments require retrieving within 0.17 seconds of the response tr
 ~33% of queries cannot succeed at any Top-K because no 1 FPS index frame falls within ±5 frames of their response track. This is a sampling artifact, not a model failure. Against the stricter metric, even a perfect retrieval model cannot exceed ~67% Top-100. Against the ±5 second metric this ceiling is higher, which is why slides numbers look more reasonable.
 
 **3. Query-index domain mismatch.**
-The query is a small cropped object image (~39×60px); the index frames are full 720×540 egocentric scenes. CLIP and BLIP were pretrained on web image-caption pairs — neither was trained to match a small crop against a full frame containing that crop somewhere.
+The query is a small cropped object image (~39×60px); the index frames are full 720×540 egocentric scenes. CLIP and BLIP were pretrained on web image-caption pairs, neither was trained to match a small crop against a full frame containing that crop somewhere.
 
 **What would actually help:**
 - 2-5 FPS index sampling to close the coverage gap
