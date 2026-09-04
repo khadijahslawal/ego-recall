@@ -1,5 +1,7 @@
 # EgoRecall - Visual Memory Retrieval for Smart Glasses
 
+<sub>**Authors:** Anais Morales &nbsp;·&nbsp; Estella Hu &nbsp;·&nbsp; Gaoyuan Gu &nbsp;·&nbsp; Khalil He</sub>
+
 EgoRecall is an AI-powered visual memory system designed for smart glasses and wearable computing platforms. The system continuously indexes a user’s egocentric visual stream and enables retrieval of previously observed scenes through semantic search.
 
 The project explores the question:
